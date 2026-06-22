@@ -26,7 +26,7 @@ export const DEFAULT_CONFIG: Omit<ConfigVersion, 'createdAt'> = {
   name: '默认配置 v1',
   isActive: true,
   thresholdMinutes: 30,
-  dedupeFields: ['siteId', 'timestamp'],
+  dedupeFields: ['siteId', 'timestamp', 'temperature'],
   timeField: 'timestamp',
   timeFormat: 'ISO',
   siteGroups: DEFAULT_SITE_GROUPS,
