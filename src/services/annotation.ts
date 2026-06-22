@@ -64,32 +64,50 @@ export async function archiveOutageCurrentAnnotations(
 
 export async function getAnnotationHistory(intervalId: string): Promise<Annotation[]> {
   const targetIv = await db.outageIntervals.get(intervalId);
-  if (!targetIv) {
-    const direct = await db.annotations
-      .where('outageIntervalId')
-      .equals(intervalId)
-      .reverse()
-      .sortBy('annotatedAt');
-    return direct;
-  }
   const TOL = ANNOTATION_TOLERANCE_MS;
   const all = await db.annotations.toArray();
+
+  if (!targetIv) {
+    // 区间不存在，只按 outageIntervalId 精确匹配
+    return all.filter((a) => a.outageIntervalId === intervalId).sort((a, b) => b.annotatedAt - a.annotatedAt);
+  }
+
   const matched: Annotation[] = [];
+  const seenIds = new Set<string>();
+
+  // 1) 精确 outageIntervalId 匹配（直接匹配当前区间的标注）
   for (const a of all) {
-    let aSiteId = a.siteId;
-    let aStartTime = a.startTime;
-    if (aSiteId === undefined || aStartTime === undefined) {
-      const oldIv = await db.outageIntervals.get(a.outageIntervalId);
-      if (!oldIv) continue;
-      aSiteId = oldIv.siteId;
-      aStartTime = oldIv.startTime;
-      await db.annotations.update(a.id, { siteId: aSiteId, startTime: aStartTime });
-    }
-    if (aSiteId === targetIv.siteId && Math.abs(aStartTime - targetIv.startTime) < TOL) {
+    if (a.outageIntervalId === intervalId) {
       matched.push(a);
+      seenIds.add(a.id);
     }
   }
+
+  // 2) 容差匹配：siteId + startTime±60s（跨版本同一断报的标注）
+  for (const a of all) {
+    if (seenIds.has(a.id)) continue;
+    let aSiteId = a.siteId;
+    let aStartTime = a.startTime;
+    // 旧数据可能没有冗余字段，尝试从它的 outageIntervalId 反查
+    if (aSiteId === undefined || aStartTime === undefined) {
+      const oldIv = await db.outageIntervals.get(a.outageIntervalId);
+      if (oldIv) {
+        aSiteId = oldIv.siteId;
+        aStartTime = oldIv.startTime;
+        await db.annotations.update(a.id, { siteId: aSiteId, startTime: aStartTime });
+      }
+    }
+    if (aSiteId && aStartTime !== undefined
+        && aSiteId === targetIv.siteId
+        && Math.abs(aStartTime - targetIv.startTime) < TOL) {
+      matched.push(a);
+      seenIds.add(a.id);
+    }
+  }
+
   matched.sort((a, b) => b.annotatedAt - a.annotatedAt);
+
+  // 兜底：多条当前标注时自动保留最新一条，其余归档
   const currentOnes = matched.filter((a) => a.isCurrent);
   if (currentOnes.length > 1) {
     const toArchive = currentOnes.slice(1).map((a) => a.id);

@@ -1,57 +1,202 @@
-# React + TypeScript + Vite
+# 站点传感器断报分析工具
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+纯前端本地 Web 应用，用于导入站点遥测日志（CSV），自动识别断报区间、支持人工标注原因、可配置化阈值/分组/异常类型，以及版本化、持久化、可复核。
 
-Currently, two official plugins are available:
+## 功能概览
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **纯前端零后端**：所有数据本地持久化（IndexedDB + localStorage）
+- **CSV 流式导入**：支持多文件、重复记录自动去重、错误行隔离
+- **断报自动识别**：按配置阈值识别大间隔区间，支持阈值/分组/异常类型
+- **配置版本化**：修改阈值后发布新版本，旧标注自动归档为历史
+- **人工标注**：断报区间标注原因，历史版本可查
+- **图表筛选**：时间范围、站点分组、异常类型、标注状态多维筛选
+- **报告导出**：CSV / HTML 报告，嵌入筛选快照可复核
+- **报告中心**：错误行报告 + 历史导出记录重下
+- **重启一致性**：刷新/重启后筛选条件、配置版本、标注、导出完全一致
 
-## Expanding the ESLint configuration
+## 快速开始
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### 1. 安装与启动
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+# 安装依赖
+npm install
+
+# 本地开发（默认端口 5173）
+npm run dev
+
+# 生产构建
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+打开 http://localhost:5173/ 进入应用。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### 2. 一键体验（推荐首次使用）
 
-export default tseslint.config({
-  extends: [
-    // other configs...
-    // Enable lint rules for React
-    reactX.configs['recommended-typescript'],
-    // Enable lint rules for React DOM
-    reactDom.configs.recommended,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+进入**仪表盘** → 点击 **「生成并导入样例数据」**，样例数据特征：
+
+| 项目 | 数值（seed=42，可复现）|
+|------|------|
+| 站点数 | 6 个（ST-001 ~ ST-006）|
+| 站点分组 | 3 组（东区/西区/北区）|
+| 样例日志 | ~4700 条（分 2 份 CSV 导入）|
+| 故意重复行 | ~100 条（两文件边界重复，测试去重）|
+| 断报区间 | 10 处（45/65/120/180 分钟不等）|
+| 错误行 | ~32 条（18 条字段缺失 + 14 条时间倒置）|
+
+生成完成后仪表盘会显示日志数、断报数、错误数统计。
+
+### 3. 页面入口
+
+| 页面 | 路径 | 入口 |
+|------|------|------|
+| 仪表盘 | `/` | 左侧导航「仪表盘」或首页 |
+| 断报分析 | `/analysis` | 左侧导航「断报分析」或仪表盘「进入分析」 |
+| 配置管理 | `/config` | 左侧导航「配置管理」 |
+| 报告中心 | `/reports` | 左侧导航「报告中心」 |
+
+---
+
+## 默认配置说明
+
+首次启动时会自动写入一条默认配置（版本 `v1`，名称「默认配置 V1」）：
+
+| 配置项 | 默认值 |
+|---------|--------|
+| 断报阈值 | **30 分钟」 |
+| 站点分组 | 东区（grp_east）、西区（grp_west）、北区（grp_north） |
+| 异常类型 | 设备离线（DEVICE_OFFLINE）、通信故障（COMM_FAULT）、电源中断（POWER_OUTAGE）、传感器故障（SENSOR_FAULT）、计划维护（MAINTENANCE）、其他（OTHER） |
+| 去重字段 | siteId、timestamp、temperature |
+| 日期格式 | 自动识别 ISO/时间戳 |
+| CSV 字段映射 | siteId=站点ID、timestamp=时间戳、其余为数值字段 |
+
+---
+
+## 完整复现流程（评审用）
+
+### 验收场景 1：导入两份包含重复记录的样例日志
+
+1. 仪表盘 →「生成并导入样例数据」
+2. 仪表盘统计卡片显示：
+   - 日志总数 ≈ 4660 条左右（去重后）
+   - 重复行 ≈ 100 条左右
+   - 断报数 = 10 条
+   - 错误数 ≈ 32 条
+3. 进入**断报分析**，应该看到 10 条断报区间甘特图
+
+### 验收场景 2：自动识别断报 + 人工标注原因
+
+1. 断报分析页 → 甘特图上任意一条 → 点击标注按钮
+2. 弹窗打开：
+   - 左侧显示断报详情 + 标注表单
+   - 右侧「标注历史」显示历史标注
+3. 选择原因（如「电源中断」）→ 填写描述 →「保存标注」
+4. 弹窗关闭后，该区间卡片上出现「已标注」徽标
+5. 筛选器选「已标注」→ 仅显示已标注的断报
+
+### 验收场景 3：时间倒置 / 字段缺失进入错误报告
+
+1. 进入**报告中心** →「错误行报告」标签
+2. 统计卡片显示：
+   - 字段缺失 ≈ 18 条
+   - 时间倒置 ≈ 14 条
+3. 可按错误类型筛选 →「导出错误报告 CSV」下载完整错误明细
+
+### 验收场景 4：修改阈值后重新计算 + 旧标注归档为历史（⭐ 核心）
+
+**复现步骤：
+
+1. 先在断报分析页，为任意一条 **≥ 45 分钟的断报标注原因（如 ST-001 的 45 分钟那条）
+2. 进入**配置管理** → 点击当前配置 →「编辑」
+3. 将「断报阈值」从 30 修改为 **40 分钟 →「保存并发布新版本」
+4. 系统会弹出确认 → 自动回到断报分析页（已按新阈值重新计算）
+5. **关键验证：
+
+   | 验证项 | 预期结果 |
+   |--------|----------|
+   | 区间总数 | 因阈值变大，数量减少（短于 40min 的断报消失 |
+   | ≥45min 的那条断报 | 仍然存在（45 > 40） |
+   | 点开该断报弹窗左侧表单 | 仍显示刚才标注的原因（标注已从 v1 迁移到 v2） |
+   | 弹窗右侧「标注历史」 | **≥ 2 条记录**（不是 0 条） |
+   | 历史记录标签 | 顶部 1 条绿色「当前标注」（V2），下面 1 条灰色「配置 V1」历史 |
+   | 同一断报 `isCurrent=true` | **仅 1 条**（数据库里不会出现 2 条当前） |
+   | 筛选「已标注」 | 计数 = 1（与弹窗当前标注一致） |
+   | 导出 CSV「标注状态」列 | 显示「已标注」，原因代码正确 |
+
+6. **刷新页面（F5）** → 再次打开同一断报弹窗 → 以上所有状态完全一致。
+
+### 验收场景 5：样例数据、默认配置、报告入口都存在
+
+- 仪表盘「生成并导入样例数据」按钮可点击 → 生成成功
+- 配置管理 → 默认配置 V1 存在
+- 报告中心 →「错误行报告」和「历史导出记录」两个标签可切换
+
+### 验收场景 6：筛选条件反映到导出
+
+1. 断报分析 → 设置任意筛选（如「已标注」 + 指定站点分组）
+2. 点击「导出 CSV」或「导出 HTML」
+3. 打开导出文件 → 头部「筛选条件」区块包含所设置的筛选条件（可复核复现）
+4. 报告中心 →「历史导出记录」→ 可看到刚刚的导出卡片，显示筛选快照
+
+### 验收场景 7：重启后完全一致
+
+1. 做完上述操作后，关闭浏览器标签页
+2. 重新打开 `http://localhost:5173/`
+3. 验证：
+   - 筛选条件（时间范围、分组、标注状态等）与关闭前完全相同
+   - 配置版本（激活版本为最新发布的那个）
+   - 标注记录（所有断报的标注状态、历史）
+   - 报告中心（错误报告、历史导出记录）
+
+---
+
+## 测试运行
+
+```bash
+# 运行单元测试（含标注归档链路、样例注入、主流程等测试）
+npm run test
+
+# watch 模式
+npm run test:watch
+
+# 类型检查
+npm run check
 ```
+
+测试覆盖（见 `__tests__/annotation-archive.test.ts）：
+
+| 测试用例 | 覆盖内容 |
+|-----------|----------|
+| 发布新版本后同断报仅保留一个当前标注 | 改阈值链路完整复现 |
+| getAnnotationHistory 脏数据兜底 | 多条 isCurrent=true 自动修复 |
+| 连续多版本发布回归 | 4 次阈值变更每轮都只有 1 条当前 |
+| archiveOutageCurrentAnnotations | 容差匹配跨版本同断报识别 |
+| runAnalysis 脏数据 UI/筛选/导出一致性 | 三端统一取最新标注 |
+| 样例数据注入 + 默认配置主流程 | 一键样例、报告入口、导出接口 |
+
+---
+
+## 技术栈
+
+| 类别 | 技术 |
+|------|------|
+| 框架 | React 18 + TypeScript + Vite 6 |
+| 状态管理 | Zustand（+ persist 持久化筛选）|
+| 本地存储 | IndexedDB（Dexie.js v4）|
+| CSV 解析 | PapaParse（流式 + 错误隔离）|
+| UI | Tailwind CSS 3 + Recharts v2 |
+| 测试 | Vitest + fake-indexeddb + jsdom |
+| 路由 | React Router v7 |
+
+---
+
+## 数据存储说明
+
+所有数据均保存在浏览器本地，**不会上传到任何服务器**：
+
+| 存储 | 内容 | 位置 |
+|------|------|------|
+| IndexedDB（SensorOutageDB_v2）| 配置版本、遥测日志、错误行、断报区间、标注、导出记录 | 浏览器 |
+| localStorage（app-store-v1）| 筛选条件快照 | 浏览器 |
+
+**清空数据**：仪表盘 →「清空所有日志与标注」按钮，或浏览器 DevTools → Application → 清空 Storage。
