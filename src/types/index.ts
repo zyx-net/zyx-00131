@@ -101,6 +101,26 @@ export interface ExportSummary {
   dateRange: [number, number] | null;
 }
 
+export interface PublishRecord {
+  id: string;
+  configVersion: string;
+  configName: string;
+  previousConfigVersion: string | null;
+  changes: {
+    thresholdMinutes?: { from: number; to: number };
+    siteGroups?: { added: string[]; removed: string[]; modified: string[] };
+    anomalyTypes?: { added: string[]; removed: string[]; modified: string[] };
+    other?: string[];
+  };
+  affectedIntervals: {
+    previousCount: number;
+    newCount: number;
+    migratedAnnotations: number;
+  };
+  createdAt: number;
+  publishedBy: string;
+}
+
 export interface ExportRecord {
   id: string;
   fileName: string;

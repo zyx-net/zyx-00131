@@ -43,6 +43,7 @@ export function Analysis() {
   const [exportBusy, setExportBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [config, setConfig] = useState<ConfigVersion | null>(null);
+  const [dataVersion, setDataVersion] = useState(0);
 
   const loadData = async (force = false) => {
     if (!activeConfig) return;
@@ -50,9 +51,11 @@ export function Analysis() {
     try {
       await reloadConfigs();
       const cfg = (await useAppStore.getState().activeConfig) || activeConfig;
-      setConfig(cfg);
+      await db.restoreConfigAnnotations(cfg.id);
       const r = await runAnalysis(cfg, force);
+      setConfig(cfg);
       setAllIntervals(r.intervals);
+      setDataVersion((v) => v + 1);
     } finally {
       setLoading(false);
     }
@@ -62,12 +65,22 @@ export function Analysis() {
     void loadData(false);
   }, [activeConfig?.id]);
 
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void loadData(false);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
   const filtered = useMemo(() => {
     if (!config) return [];
     let f = filter;
     if (f.configVersion !== config.id) f = { ...f, configVersion: config.id };
     return filterIntervals(allIntervals, f);
-  }, [allIntervals, filter, config]);
+  }, [allIntervals, filter, config, dataVersion]);
 
   const summary = useMemo(() => {
     const ann = filtered.filter((i) => i.annotation).length;

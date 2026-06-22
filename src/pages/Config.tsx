@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Settings, Save, Plus, X, Trash2, GripVertical, Tag, Palette, Clock, RefreshCw, Copy, ChevronRight } from 'lucide-react';
+import { Settings, Save, Plus, X, Trash2, GripVertical, Tag, Palette, Clock, RefreshCw, Copy, ChevronRight, History, FileText } from 'lucide-react';
 import { useAppStore } from '@/stores/appStore';
-import type { AnomalyType, ConfigVersion, SiteGroup } from '@/types';
+import type { AnomalyType, ConfigVersion, PublishRecord, SiteGroup } from '@/types';
 import { db } from '@/db';
 import { runAnalysis } from '@/services/analyzer';
-import { cn, uid } from '@/utils';
+import { createPublishRecord, formatChangeSummary, getPublishRecords } from '@/services/publish';
+import { cn, formatDateTime, uid } from '@/utils';
 
-type Tab = 'threshold' | 'groups' | 'types' | 'versions';
+type Tab = 'threshold' | 'groups' | 'types' | 'versions' | 'publish';
 
 export function Config() {
   const configs = useAppStore((s) => s.configs);
@@ -20,6 +21,7 @@ export function Config() {
   const [draft, setDraft] = useState<ConfigVersion | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [publishRecords, setPublishRecords] = useState<PublishRecord[]>([]);
 
   useEffect(() => {
     if (activeConfig) {
@@ -27,6 +29,10 @@ export function Config() {
       setDirty(false);
     }
   }, [activeConfig?.id]);
+
+  useEffect(() => {
+    void getPublishRecords().then(setPublishRecords);
+  }, [tab]);
 
   useEffect(() => {
     const h = (e: BeforeUnloadEvent) => {
@@ -43,29 +49,42 @@ export function Config() {
   const markDirty = () => setDirty(true);
 
   const handlePublishNewVersion = async () => {
-    if (!draft) return;
+    if (!draft || !activeConfig) return;
     setBusy(true);
     try {
+      const oldCfg = activeConfig;
+      const prevCount = await db.outageIntervals.where('configVersion').equals(oldCfg.id).count();
+      const prevAnnots = await db.annotations.where('configVersion').equals(oldCfg.id).filter((a) => a.isCurrent).count();
+
       const nextIdNum = (await db.configVersions.count()) + 1;
       const newCfg: ConfigVersion = {
         ...draft,
         id: `v${nextIdNum}`,
         createdAt: Date.now(),
         isActive: true,
-        name: draft.name === activeConfig.name ? `${draft.id}→v${nextIdNum}` : draft.name,
+        name: draft.name === oldCfg.name ? `${draft.id}→v${nextIdNum}` : draft.name,
       };
-      await db.transaction('rw', db.configVersions, async () => {
+      await db.transaction('rw', db.configVersions, db.annotations, async () => {
         await db.configVersions.toCollection().modify({ isActive: false });
         await db.configVersions.add(newCfg);
       });
       await reloadConfigs();
       setFilter({ configVersion: newCfg.id });
-      // 自动重新计算新配置的断报
+
       const r = await runAnalysis(newCfg, true);
+      await db.restoreConfigAnnotations(newCfg.id);
+
+      await createPublishRecord(newCfg, oldCfg, {
+        previousCount: prevCount,
+        newCount: r.totalProcessed,
+        migratedAnnotations: prevAnnots,
+      });
+
       setDirty(false);
+      void getPublishRecords().then(setPublishRecords);
       showToast(
         'success',
-        `配置 v${nextIdNum} 已发布为当前版本，重新识别 ${r.totalProcessed} 个断报区间（旧标注保留为历史）`,
+        `配置 v${nextIdNum} 已发布，重新识别 ${r.totalProcessed} 个断报区间，迁移 ${prevAnnots} 条标注`,
       );
     } catch (e) {
       showToast('error', `发布失败: ${(e as Error).message}`);
@@ -130,9 +149,17 @@ export function Config() {
   const switchToVersion = async (id: string) => {
     setBusy(true);
     try {
+      const targetCfg = configs.find((c) => c.id === id);
+      if (!targetCfg) throw new Error(`配置 ${id} 不存在`);
+
       await setActiveConfig(id);
       setFilter({ configVersion: id });
-      showToast('success', `已切换到配置 ${id.toUpperCase()}`);
+      await runAnalysis(targetCfg, false);
+      await db.restoreConfigAnnotations(id);
+
+      showToast('success', `已切换到配置 ${id.toUpperCase()}，标注状态已恢复`);
+    } catch (e) {
+      showToast('error', `切换失败: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -153,6 +180,7 @@ export function Config() {
     { id: 'groups', label: '站点分组', icon: Tag },
     { id: 'types', label: '异常类型', icon: Palette },
     { id: 'versions', label: '版本历史', icon: Settings },
+    { id: 'publish', label: '发布记录', icon: History },
   ];
 
   return (
@@ -506,6 +534,84 @@ export function Config() {
                         <RefreshCw size={12} />
                         {c.isActive ? '使用中' : '切换到此版本'}
                       </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {tab === 'publish' && (
+            <div className="max-w-4xl space-y-3">
+              <div className="text-[11px] text-slate-500 mb-2">
+                发布变更日志 · 记录每次发布的配置变更和对断报区间的影响
+              </div>
+              {publishRecords.length === 0 ? (
+                <div className="text-slate-600 text-center py-10">
+                  <History size={32} className="mx-auto mb-3 opacity-30" />
+                  暂无发布记录
+                </div>
+              ) : (
+                publishRecords.map((r) => (
+                  <div
+                    key={r.id}
+                    className="card-border rounded-sm p-4 space-y-2 fade-in"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-sm bg-signal-400/10 border border-signal-400/30 flex items-center justify-center shrink-0">
+                        <FileText size={16} className="text-signal-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-display text-sm text-signal-300">
+                            {r.configName} ({r.configVersion.toUpperCase()})
+                          </span>
+                          {r.previousConfigVersion && (
+                            <span className="text-[10px] text-slate-500">
+                              ← {r.previousConfigVersion.toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          发布于 {formatDateTime(r.createdAt)} · 由 {r.publishedBy}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="ml-[52px] space-y-2">
+                      <div className="text-[11px] text-history-400 font-display tracking-wider">
+                        变更概要: {formatChangeSummary(r)}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3 text-[11px]">
+                        <div className="bg-deep-800/40 rounded-sm p-2">
+                          <div className="text-slate-500">原区间数</div>
+                          <div className="font-display text-lg text-slate-300">{r.affectedIntervals.previousCount}</div>
+                        </div>
+                        <div className="bg-deep-800/40 rounded-sm p-2">
+                          <div className="text-slate-500">新区间数</div>
+                          <div className="font-display text-lg text-signal-400">{r.affectedIntervals.newCount}</div>
+                        </div>
+                        <div className="bg-deep-800/40 rounded-sm p-2">
+                          <div className="text-slate-500">迁移标注</div>
+                          <div className="font-display text-lg text-success-400">{r.affectedIntervals.migratedAnnotations}</div>
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] text-slate-600 space-y-0.5">
+                        {r.changes.thresholdMinutes && (
+                          <div>· 断报阈值: {r.changes.thresholdMinutes.from} → {r.changes.thresholdMinutes.to} 分钟</div>
+                        )}
+                        {r.changes.siteGroups && (
+                          <div>· 站点分组: {r.changes.siteGroups.added.length} 新增, {r.changes.siteGroups.removed.length} 删除, {r.changes.siteGroups.modified.length} 修改</div>
+                        )}
+                        {r.changes.anomalyTypes && (
+                          <div>· 异常类型: {r.changes.anomalyTypes.added.length} 新增, {r.changes.anomalyTypes.removed.length} 删除, {r.changes.anomalyTypes.modified.length} 修改</div>
+                        )}
+                        {r.changes.other?.map((o, i) => (
+                          <div key={i}>· {o}</div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))

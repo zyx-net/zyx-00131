@@ -46,6 +46,7 @@ export const useAppStore = create<AppState>()(
         set({ loading: true });
         try {
           const active = await db.ensureDefaultConfig();
+          await db.ensureAnnotationConsistency();
           await get().reloadConfigs();
           const f = get().filter;
           if (f.configVersion !== active.id) {

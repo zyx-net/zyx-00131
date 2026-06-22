@@ -5,6 +5,7 @@ import type {
   ErrorRow,
   ExportRecord,
   OutageInterval,
+  PublishRecord,
   TelemetryLog,
 } from '@/types';
 
@@ -40,6 +41,7 @@ export class AppDatabase extends Dexie {
   outageIntervals!: Table<OutageInterval, string>;
   annotations!: Table<Annotation, string>;
   exportRecords!: Table<ExportRecord, string>;
+  publishRecords!: Table<PublishRecord, string>;
 
   constructor() {
     super('SensorOutageDB_v2');
@@ -52,6 +54,7 @@ export class AppDatabase extends Dexie {
       annotations:
         'id, outageIntervalId, configVersion, annotatedAt',
       exportRecords: 'id, fileType, configVersion, createdAt',
+      publishRecords: 'id, configVersion, createdAt',
     });
   }
 
@@ -94,10 +97,68 @@ export class AppDatabase extends Dexie {
   }
 
   async setActiveConfig(id: string): Promise<void> {
-    await this.transaction('rw', this.configVersions, async () => {
+    await this.transaction('rw', this.configVersions, this.annotations, async () => {
       await this.configVersions.toCollection().modify({ isActive: false });
       await this.configVersions.update(id, { isActive: true });
+      await this.restoreConfigAnnotations(id);
     });
+  }
+
+  async restoreConfigAnnotations(configId: string): Promise<number> {
+    const allAnnots = await this.annotations.toArray();
+    const byOutageKey = new Map<string, Annotation[]>();
+
+    for (const a of allAnnots) {
+      let siteId = a.siteId;
+      let startTime = a.startTime;
+      if (siteId === undefined || startTime === undefined) {
+        const iv = await this.outageIntervals.get(a.outageIntervalId);
+        if (!iv) continue;
+        siteId = iv.siteId;
+        startTime = iv.startTime;
+        await this.annotations.update(a.id, { siteId, startTime });
+      }
+      const key = `${siteId}_${startTime}`;
+      if (!byOutageKey.has(key)) byOutageKey.set(key, []);
+      byOutageKey.get(key)!.push(a);
+    }
+
+    let restoredCount = 0;
+    const toUpdate: Array<{ id: string; isCurrent: boolean }> = [];
+
+    for (const [, anns] of byOutageKey) {
+      const targetAnnots = anns.filter((a) => a.configVersion === configId);
+      if (targetAnnots.length > 0) {
+        targetAnnots.sort((a, b) => b.annotatedAt - a.annotatedAt);
+        targetAnnots.forEach((a, idx) => {
+          const shouldBeCurrent = idx === 0;
+          if (a.isCurrent !== shouldBeCurrent) {
+            toUpdate.push({ id: a.id, isCurrent: shouldBeCurrent });
+            if (shouldBeCurrent) restoredCount++;
+          }
+        });
+        const otherAnnots = anns.filter((a) => a.configVersion !== configId);
+        for (const a of otherAnnots) {
+          if (a.isCurrent) {
+            toUpdate.push({ id: a.id, isCurrent: false });
+          }
+        }
+      }
+    }
+
+    if (toUpdate.length > 0) {
+      await this.annotations.bulkUpdate(
+        toUpdate.map((u) => ({ key: u.id, changes: { isCurrent: u.isCurrent } })),
+      );
+    }
+    return restoredCount;
+  }
+
+  async ensureAnnotationConsistency(): Promise<void> {
+    const active = await this.getActiveConfig();
+    if (active) {
+      await this.restoreConfigAnnotations(active.id);
+    }
   }
 
   async createNewConfig(base: ConfigVersion, overrides: Partial<ConfigVersion>): Promise<ConfigVersion> {
