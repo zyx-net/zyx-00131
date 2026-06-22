@@ -80,6 +80,22 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
         await db.annotations.where('configVersion').equals(config.id).modify({ isCurrent: false });
         const allAnnots = await db.annotations.toArray();
         const oldAnnots = allAnnots.filter((a) => a.configVersion !== config.id);
+        // 无论有没有迁移标注，先把旧版本的所有当前标注归档
+        // （避免阈值改得过大、没有新区间时，旧标注仍挂着 isCurrent=true）
+        const TOL = ANNOTATION_TOLERANCE_MS;
+        for (const a of oldAnnots) {
+          if (!a.isCurrent) continue;
+          if (a.siteId !== undefined && a.startTime !== undefined) {
+            await archiveOutageCurrentAnnotations(a.siteId, a.startTime, TOL);
+          } else {
+            const oldIv = await db.outageIntervals.get(a.outageIntervalId);
+            if (oldIv) {
+              await archiveOutageCurrentAnnotations(oldIv.siteId, oldIv.startTime, TOL);
+            } else {
+              await db.annotations.update(a.id, { isCurrent: false });
+            }
+          }
+        }
         if (oldAnnots.length > 0) {
           const enriched: Array<{ ann: Annotation; siteId: string; startTime: number }> = [];
           for (const a of oldAnnots) {
@@ -93,7 +109,6 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
             }
             enriched.push({ ann: a, siteId: sId, startTime: sTime });
           }
-          const TOL = ANNOTATION_TOLERANCE_MS;
           const toCopy: Annotation[] = [];
           for (const iv of computed) {
             const match = enriched.find(
@@ -113,9 +128,6 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
             }
           }
           if (toCopy.length > 0) {
-            for (const iv of computed) {
-              await archiveOutageCurrentAnnotations(iv.siteId, iv.startTime, TOL);
-            }
             await db.annotations.bulkAdd(toCopy);
           }
         }

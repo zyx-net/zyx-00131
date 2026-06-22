@@ -351,4 +351,48 @@ describe('标注历史归档（断报阈值变更链路）', () => {
     expect(dbCurrent.length).toBe(1);
     expect(dbCurrent[0].id).toBe('ann_new');
   });
+
+  it('边界场景：阈值改得过大没有新区间时，旧版本当前标注也会被归档', async () => {
+    const v1 = makeConfig('v1', 30, true);
+    await db.configVersions.add(v1);
+
+    const t0 = Date.now() - 7200_000;
+    await db.telemetryLogs.bulkAdd([
+      makeLog('ST-999', t0),
+      makeLog('ST-999', t0 + 45 * 60_000),
+    ]);
+
+    // v1 有 1 条断报（45min > 30）
+    const r1 = await runAnalysis(v1, true);
+    expect(r1.totalProcessed).toBe(1);
+    const iv = r1.intervals[0];
+
+    // v1 标注（isCurrent=true）
+    await saveAnnotation(iv, {
+      reasonCode: 'POWER_OUTAGE',
+      reasonText: 'v1 断电',
+      remark: '',
+    });
+    const before = await db.annotations.toArray();
+    expect(before.filter((a) => a.isCurrent).length).toBe(1);
+
+    // 发布 v2，阈值设为 10000 分钟（远大于 45min，不会产生任何新区间）
+    const v2 = makeConfig('v2', 10000, true);
+    await db.transaction('rw', db.configVersions, async () => {
+      await db.configVersions.toCollection().modify({ isActive: false });
+      await db.configVersions.add(v2);
+    });
+
+    // forceRecompute → 应该把 v1 的标注归档，即使没有产生任何 v2 新区间
+    const r2 = await runAnalysis(v2, true);
+    expect(r2.totalProcessed).toBe(0);  // 阈值太大，无断报
+
+    // 关键断言：v1 的标注已经被归档为历史
+    const after = await db.annotations.toArray();
+    const current = after.filter((a) => a.isCurrent);
+    expect(current.length).toBe(0);  // 没有任何当前标注（因为 v2 没有区间）
+    expect(after[0].isCurrent).toBe(false);
+    expect(after[0].configVersion).toBe('v1');
+    expect(after[0].reasonCode).toBe('POWER_OUTAGE');
+  });
 });
