@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background-color: #060E1F;
+  color: #E2E8F0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.deep-grid-bg {
+  background-color: #060E1F;
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(0, 212, 255, 0.08) 0%, transparent 60%),
+    linear-gradient(180deg, transparent, transparent);
+  background-size: 100% 300px, 100% 100%;
+}
+
+.deep-dot-grid {
+  background-image: radial-gradient(rgba(0, 212, 255, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.card-border {
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  background: linear-gradient(180deg, rgba(16, 42, 78, 0.6) 0%, rgba(11, 31, 58, 0.95) 100%);
+}
+
+.btn-primary {
+  @apply px-4 py-2 rounded-sm font-display text-xs uppercase tracking-wider
+    border-2 border-signal-400 text-signal-400
+    bg-signal-400/10
+    transition-all duration-150
+    hover:bg-signal-400/20 hover:shadow-glow-signal
+    disabled:opacity-50 disabled:cursor-not-allowed
+    focus:outline-none;
+}
+
+.btn-ghost {
+  @apply px-3 py-2 rounded-sm text-sm
+    border border-signal-400/40 text-signal-300/80
+    bg-transparent
+    hover:bg-signal-400/10
+    transition-colors duration-150;
+}
+
+.btn-danger {
+  @apply px-3 py-2 rounded-sm text-sm
+    border border-fault-400 text-fault-400
+    hover:bg-fault-400/10;
+}
+
+.input-base {
+  @apply bg-deep-800 border border-signal-400/20 rounded-sm px-3 py-2 text-sm
+    focus:border-signal-400/60 focus:outline-none focus:ring-1 focus:ring-signal-400/30
+    placeholder:text-slate-500;
+}
+
+.tag {
+  @apply inline-flex items-center px-2 py-0.5 text-xs rounded-sm
+    border border-signal-400/30 bg-signal-400/10 text-signal-300;
+}
+
+.scroll-slim::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: rgba(0, 212, 255, 0.05);
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.2);
+  border-radius: 3px;
+}
+
+.h-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.3), transparent);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fade-in 200ms ease-out; }
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.slide-in-right { animation: slide-in-right 300ms ease-out; }
+
+.glow-text {
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7) sepia(1) saturate(5) hue-rotate(160deg);
+}
+
+select {
+  background-color: #102A4E;
+}
