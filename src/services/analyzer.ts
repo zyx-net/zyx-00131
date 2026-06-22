@@ -6,6 +6,7 @@ import type {
   OutageInterval,
 } from '@/types';
 import { db } from '@/db';
+import { ANNOTATION_TOLERANCE_MS, archiveOutageCurrentAnnotations } from '@/services/annotation';
 import { hashString, uid } from '@/utils';
 
 export interface AnalysisResult {
@@ -92,7 +93,7 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
             }
             enriched.push({ ann: a, siteId: sId, startTime: sTime });
           }
-          const TOL = 60_000;
+          const TOL = ANNOTATION_TOLERANCE_MS;
           const toCopy: Annotation[] = [];
           for (const iv of computed) {
             const match = enriched.find(
@@ -111,7 +112,12 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
               });
             }
           }
-          if (toCopy.length > 0) await db.annotations.bulkAdd(toCopy);
+          if (toCopy.length > 0) {
+            for (const iv of computed) {
+              await archiveOutageCurrentAnnotations(iv.siteId, iv.startTime, TOL);
+            }
+            await db.annotations.bulkAdd(toCopy);
+          }
         }
       }
     });
@@ -126,7 +132,12 @@ export async function runAnalysis(config: ConfigVersion, forceRecompute = false)
       .anyOf(ivIds)
       .filter((a) => a.configVersion === config.id && a.isCurrent)
       .toArray();
-    for (const a of anns) annMap.set(a.outageIntervalId, a);
+    for (const a of anns) {
+      const existing = annMap.get(a.outageIntervalId);
+      if (!existing || a.annotatedAt > existing.annotatedAt) {
+        annMap.set(a.outageIntervalId, a);
+      }
+    }
   }
   const combined: IntervalWithAnnotation[] = intervals.map((iv) => ({
     ...iv,

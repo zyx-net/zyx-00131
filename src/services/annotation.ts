@@ -11,16 +11,8 @@ export async function saveAnnotation(
   },
   by = 'local-user',
 ): Promise<Annotation> {
-  const existingCurrent = await db.annotations
-    .where('outageIntervalId')
-    .equals(interval.id)
-    .filter((a) => a.configVersion === interval.configVersion && a.isCurrent)
-    .first();
-
   return await db.transaction('rw', db.annotations, async () => {
-    if (existingCurrent) {
-      await db.annotations.update(existingCurrent.id, { isCurrent: false });
-    }
+    await archiveOutageCurrentAnnotations(interval.siteId, interval.startTime);
     const ann: Annotation = {
       id: uid('ann'),
       outageIntervalId: interval.id,
@@ -39,6 +31,37 @@ export async function saveAnnotation(
   });
 }
 
+export const ANNOTATION_TOLERANCE_MS = 60_000;
+
+export async function archiveOutageCurrentAnnotations(
+  siteId: string,
+  startTime: number,
+  tolerance = ANNOTATION_TOLERANCE_MS,
+): Promise<number> {
+  const all = await db.annotations.toArray();
+  const toArchive: string[] = [];
+  for (const a of all) {
+    let aSiteId = a.siteId;
+    let aStartTime = a.startTime;
+    if (aSiteId === undefined || aStartTime === undefined) {
+      const iv = await db.outageIntervals.get(a.outageIntervalId);
+      if (!iv) continue;
+      aSiteId = iv.siteId;
+      aStartTime = iv.startTime;
+      await db.annotations.update(a.id, { siteId: aSiteId, startTime: aStartTime });
+    }
+    if (a.isCurrent && aSiteId === siteId && Math.abs(aStartTime - startTime) < tolerance) {
+      toArchive.push(a.id);
+    }
+  }
+  if (toArchive.length > 0) {
+    await db.annotations.bulkUpdate(
+      toArchive.map((id) => ({ key: id, changes: { isCurrent: false } })),
+    );
+  }
+  return toArchive.length;
+}
+
 export async function getAnnotationHistory(intervalId: string): Promise<Annotation[]> {
   const targetIv = await db.outageIntervals.get(intervalId);
   if (!targetIv) {
@@ -49,7 +72,7 @@ export async function getAnnotationHistory(intervalId: string): Promise<Annotati
       .sortBy('annotatedAt');
     return direct;
   }
-  const TOL = 60_000;
+  const TOL = ANNOTATION_TOLERANCE_MS;
   const all = await db.annotations.toArray();
   const matched: Annotation[] = [];
   for (const a of all) {
@@ -60,12 +83,25 @@ export async function getAnnotationHistory(intervalId: string): Promise<Annotati
       if (!oldIv) continue;
       aSiteId = oldIv.siteId;
       aStartTime = oldIv.startTime;
+      await db.annotations.update(a.id, { siteId: aSiteId, startTime: aStartTime });
     }
     if (aSiteId === targetIv.siteId && Math.abs(aStartTime - targetIv.startTime) < TOL) {
       matched.push(a);
     }
   }
   matched.sort((a, b) => b.annotatedAt - a.annotatedAt);
+  const currentOnes = matched.filter((a) => a.isCurrent);
+  if (currentOnes.length > 1) {
+    const toArchive = currentOnes.slice(1).map((a) => a.id);
+    await db.transaction('rw', db.annotations, async () => {
+      for (const id of toArchive) {
+        await db.annotations.update(id, { isCurrent: false });
+      }
+    });
+    for (const a of matched) {
+      if (toArchive.includes(a.id)) a.isCurrent = false;
+    }
+  }
   return matched;
 }
 
